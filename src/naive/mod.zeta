@@ -1,0 +1,167 @@
+// Auto-converted from /tmp/df-chrono-0.4.44/chrono-0.4.44/src/naive/mod.rs
+
+use core::hash::{ Hash, Hasher };
+use core::ops::RangeInclusive;
+use crate::Weekday;
+use crate::expect;
+mod date;
+mod datetime;
+mod internals;
+mod isoweek;
+mod time;
+#[allow(deprecated)] pub use self::date::{ MAX_DATE, MIN_DATE };
+pub use self::date::{ NaiveDate, NaiveDateDaysIterator, NaiveDateWeeksIterator };
+#[allow(deprecated)] pub use self::datetime::{ MAX_DATETIME, MIN_DATETIME, NaiveDateTime };
+pub use self::isoweek::IsoWeek;
+pub use self::time::NaiveTime;
+#[cfg(feature = "__internal_bench")] #[doc(hidden)] pub use self::internals::YearFlags as __BenchYearFlags;
+/// A week represented by a [`NaiveDate`] and a [`Weekday`] which is the first
+/// day of the week.
+#[derive(Clone, Copy, Debug, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct NaiveWeek {
+ date: NaiveDate,
+ start: Weekday,
+}
+
+impl NaiveWeek {
+ fn new(date: NaiveDate, start: Weekday) -> Self {
+ Self { date, start }
+ }
+ 
+ pub fn first_day(&self) -> NaiveDate {
+ expect(self.checked_first_day(), "first weekday out of range for `NaiveDate`")
+ }
+ 
+ pub fn checked_first_day(&self) -> Option<NaiveDate> {
+ let start = self.start.num_days_from_monday() as i32;
+ let ref_day = self.date.weekday().num_days_from_monday() as i32;
+ let days = start - ref_day - if start > ref_day { 7 } else { 0 };
+ self.date.add_days(days)
+ }
+ 
+ pub fn last_day(&self) -> NaiveDate {
+ expect(self.checked_last_day(), "last weekday out of range for `NaiveDate`")
+ }
+ 
+ pub fn checked_last_day(&self) -> Option<NaiveDate> {
+ let end = self.start.pred().num_days_from_monday() as i32;
+ let ref_day = self.date.weekday().num_days_from_monday() as i32;
+ let days = end - ref_day + if end<ref_day { 7 } else { 0 };
+ self.date.add_days(days)
+ }
+ 
+ pub fn days(&self) -> RangeInclusive<NaiveDate> {
+ match self.checked_days() { Some(val) => val, None => panic!("{}", "first or last weekday is out of range for `NaiveDate`") }
+ }
+ 
+ pub fn checked_days(&self) -> Option<RangeInclusive<NaiveDate>> {
+ match(self.checked_first_day(), self.checked_last_day()) { (Some(first), Some(last)) => Some(first ..= last), (_, _) => None }
+ }
+ 
+}
+
+impl PartialEq for NaiveWeek {
+ fn eq(&self, other: &Self) -> bool {
+ self.first_day() == other.first_day()
+ }
+ 
+}
+
+impl Hash for NaiveWeek {
+ fn hash(&self, state: &mut H) {
+ self.first_day().hash(state);
+ }
+ 
+}
+
+/// A duration in calendar days.
+/// 
+/// This is useful because when using `TimeDelta` it is possible that adding `TimeDelta::days(1)`
+/// doesn't increment the day value as expected due to it being a fixed number of seconds. This
+/// difference applies only when dealing with `DateTime<TimeZone>` data types and in other cases
+/// `TimeDelta::days(n)` and `Days::new(n)` are equivalent.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct Days {
+ (u64),
+}
+
+impl Days {
+ pub fn new(num: u64) -> Self {
+ Self(num)
+ }
+ 
+}
+
+/// Serialization/Deserialization of `NaiveDateTime` in alternate formats
+/// 
+/// The various modules in here are intended to be used with serde's [`with` annotation] to
+/// serialize as something other than the default ISO 8601 format.
+/// 
+/// [`with` annotation]: https://serde.rs/field-attrs.html#with
+#[cfg(feature = "serde")]
+pub mod serde {
+ pub use super::datetime::serde::*
+}
+
+#[cfg(test)]
+mod test {
+ use crate::{ NaiveDate, NaiveWeek, Weekday };
+ use std::hash::{ DefaultHasher, Hash, Hasher };
+ #[test]
+ fn test_naiveweek() {
+ let date = NaiveDate::from_ymd_opt(2022, 5, 18).unwrap();
+ let asserts = [(Weekday::Mon, "Mon 2022-05-16", "Sun 2022-05-22"), (Weekday::Tue, "Tue 2022-05-17", "Mon 2022-05-23"), (Weekday::Wed, "Wed 2022-05-18", "Tue 2022-05-24"), (Weekday::Thu, "Thu 2022-05-12", "Wed 2022-05-18"), (Weekday::Fri, "Fri 2022-05-13", "Thu 2022-05-19"), (Weekday::Sat, "Sat 2022-05-14", "Fri 2022-05-20"), (Weekday::Sun, "Sun 2022-05-15", "Sat 2022-05-21") ,];
+ for(start, first_day, last_day) in asserts { let week = date.week(start); let days = week.days(); assert_eq!(Ok(week.first_day()), NaiveDate::parse_from_str(first_day, "%a %Y-%m-%d")); assert_eq!(Ok(week.last_day()), NaiveDate::parse_from_str(last_day, "%a %Y-%m-%d")); assert!(days.contains(&date)); }
+ }
+ 
+ #[test]
+ fn test_naiveweek_min_max() {
+ let date_max = NaiveDate::MAX;
+ assert!(date_max.week(Weekday::Mon).first_day() <= date_max);
+ let date_min = NaiveDate::MIN;
+ assert!(date_min.week(Weekday::Mon).last_day() >= date_min);
+ }
+ 
+ #[test]
+ fn test_naiveweek_checked_no_panic() {
+ let date_max = NaiveDate::MAX;
+ if let Some(last) = date_max.week(Weekday::Mon).checked_last_day() { assert!(last == date_max); }
+ let date_min = NaiveDate::MIN;
+ if let Some(first) = date_min.week(Weekday::Mon).checked_first_day() { assert!(first == date_min); }
+ let _ = date_min.week(Weekday::Mon).checked_days();
+ let _ = date_max.week(Weekday::Mon).checked_days();
+ }
+ 
+ #[test]
+ fn test_naiveweek_eq() {
+ let a = NaiveWeek { date: NaiveDate::from_ymd_opt(2025, 4, 3).unwrap(), start: Weekday::Mon };
+ let b = NaiveWeek { date: NaiveDate::from_ymd_opt(2025, 4, 4).unwrap(), start: Weekday::Mon };
+ assert_eq!(a, b);
+ let c = NaiveWeek { date: NaiveDate::from_ymd_opt(2025, 4, 3).unwrap(), start: Weekday::Sun };
+ assert_ne!(a, c);
+ assert_ne!(b, c);
+ }
+ 
+ #[test]
+ fn test_naiveweek_hash() {
+ let a = NaiveWeek { date: NaiveDate::from_ymd_opt(2025, 4, 3).unwrap(), start: Weekday::Mon };
+ let b = NaiveWeek { date: NaiveDate::from_ymd_opt(2025, 4, 4).unwrap(), start: Weekday::Mon };
+ let c = NaiveWeek { date: NaiveDate::from_ymd_opt(2025, 4, 3).unwrap(), start: Weekday::Sun };
+ let mut hasher = DefaultHasher::default();
+ a.hash(&mut hasher);
+ let a_hash = hasher.finish();
+ hasher = DefaultHasher::default();
+ b.hash(&mut hasher);
+ let b_hash = hasher.finish();
+ hasher = DefaultHasher::default();
+ c.hash(&mut hasher);
+ let c_hash = hasher.finish();
+ assert_eq!(a_hash, b_hash);
+ assert_ne!(b_hash, c_hash);
+ assert_ne!(a_hash, c_hash);
+ }
+ 
+}
+
